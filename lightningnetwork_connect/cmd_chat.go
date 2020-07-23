@@ -53,7 +53,7 @@ const (
 
 type messageState uint8
 
-const (
+const (							//채팅 보낼때 성공하면 v뜨고 실패하면 x뜨게 하는 변수
 	statePending messageState = iota
 
 	stateDelivered
@@ -61,7 +61,7 @@ const (
 	stateFailed
 )
 
-type chatLine struct {
+type chatLine struct {					//내가 보내는 채팅에 들어가는 내용들 채팅, 보내는 사람, 받는 사람, 수수료, 시간 등등 채팅 gui에 들어가는 값들
 	text      string
 	sender    route.Vertex
 	recipient *route.Vertex
@@ -133,7 +133,7 @@ func initAliasMaps(conn *grpc.ClientConn) error {
 	return nil
 }
 
-func setDest(destStr string) {
+func setDest(destStr string) {				//커맨드창에서 send 입력할때 주소값 받아서 여기로 가져옴
 	dest, err := route.NewVertexFromStr(destStr)
 	if err == nil {
 		destination = &dest
@@ -183,11 +183,11 @@ func chat(ctx *cli.Context) error {
 		log.Panicln(err)
 	}
 	
-	addMsg_fake :=func(line chatLine) int {
+	addMsg_py :=func(line chatLine) int {
 		msgLines = append(msgLines,line)
 		return len(msgLines)-1
 		}
-	sendreply_func :=func() error{
+	sendreply_func :=func() error{				//받은 명령이 temp일 경우 파이썬을 실행해 온도를 측정하고 상대방에게 
 		var g *gocui.Gui
 		var test string
 		cmd := exec.Command("python3","AdafruitDHT.py","11","4")
@@ -199,7 +199,7 @@ func chat(ctx *cli.Context) error {
 		newMsg := test
 	
 		d := *destination
-		msgIdx := addMsg_fake(chatLine{
+		msgIdx := addMsg_py(chatLine{
 			sender:    self,
 			text:      newMsg,
 			recipient: &d,
