@@ -6,9 +6,10 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	
+	"log"
 	"strings"
 	"time"
-	
+	"os/exec"
 
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -17,15 +18,15 @@ import (
 	"github.com/lightningnetwork/lnd/routing/route"
 	"google.golang.org/grpc"
 
-	
+	"github.com/jroimartin/gocui"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/urfave/cli"
 )
 
-var sendCommand = cli.Command{
-	Name:      "send",
-	Category:  "Send",
+var chatCommand = cli.Command{
+	Name:      "chat",
+	Category:  "Chat",
 	ArgsUsage: "recipient_pubkey",
 	Usage:     "Use lnd as a p2p messenger application.",
 	Action:    actionDecorator(chat),
@@ -69,6 +70,10 @@ type chatLine struct {
 	timestamp time.Time
 }
 
+func(this *chatLine) Format() string {
+		return fmt.Sprintf("%s",this.text)
+		}
+
 var (
 	msgLines       []chatLine
 	destination    *route.Vertex
@@ -78,8 +83,6 @@ var (
 	aliasToKey = make(map[string]route.Vertex)
 
 	self route.Vertex
-
-	Message string		//insert youngseok
 )
 
 func initAliasMaps(conn *grpc.ClientConn) error {
@@ -121,7 +124,7 @@ func initAliasMaps(conn *grpc.ClientConn) error {
 	if err != nil {
 		return err
 	}
-	
+
 	self, err = route.NewVertexFromStr(info.IdentityPubkey)
 	if err != nil {
 		return err
@@ -141,12 +144,6 @@ func setDest(destStr string) {
 	}
 }
 
-func setMessage(messStr []string){					//insert youngseok
-
-	Message = strings.Join(messStr,"")
-
-}
-
 func chat(ctx *cli.Context) error {
 	chatMsgAmt := int64(ctx.Uint64("amt_msat"))
 
@@ -161,9 +158,6 @@ func chat(ctx *cli.Context) error {
 	if ctx.NArg() != 0 {
 		destStr := ctx.Args().First()
 		setDest(destStr)
-		messStr := ctx.Args().Tail()
-		setMessage(messStr)
-		
 	}
 
 	mainRpc := lnrpc.NewLightningClient(conn)
@@ -177,16 +171,291 @@ func chat(ctx *cli.Context) error {
 		return err
 	}
 
+	g, err := gocui.NewGui(gocui.OutputNormal)
+	if err != nil {
+		log.Panicln(err)
+	}
+	defer g.Close()
+
+	g.SetManagerFunc(layout)
+
+	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+		log.Panicln(err)
+	}
 	
+	addMsg_fake :=func(line chatLine) int {
+		msgLines = append(msgLines,line)
+		return len(msgLines)-1
+		}
+	sendreply_func :=func() error{
+		var g *gocui.Gui
+		var test string
+		cmd := exec.Command("python3","AdafruitDHT.py","11","4")
+                out, err :=cmd.CombinedOutput()
+                if err != nil{
+                fmt.Println(fmt.Sprint(err)+string(out))
+                }
+                test = string(out)	
+		newMsg := test
+	
+		d := *destination
+		msgIdx := addMsg_fake(chatLine{
+			sender:    self,
+			text:      newMsg,
+			recipient: &d,
+		})	
+
+		payAmt := runningBalance[*destination]
+		if payAmt < chatMsgAmt {
+			payAmt = chatMsgAmt
+		}
+		if payAmt > 10*chatMsgAmt {
+			payAmt = 10 * chatMsgAmt
+		}
+
+		var preimage lntypes.Preimage
+		if _, err := rand.Read(preimage[:]); err != nil {
+			return err
+		}
+		hash := preimage.Hash()
+
+		// Message sending time stamp
+		timestamp := time.Now().UnixNano()
+		var timeBuffer [8]byte
+		byteOrder.PutUint64(timeBuffer[:], uint64(timestamp))
+
+		// Sign all data.
+		signData, err := getSignData(
+			self, *destination, timeBuffer[:], []byte(newMsg),
+		)
+		if err != nil {
+			return err
+		}
+
+		signResp, err := signClient.SignMessage(context.Background(), &signrpc.SignMessageReq{
+			Msg: signData,
+			KeyLoc: &signrpc.KeyLocator{
+				KeyFamily: int32(keychain.KeyFamilyNodeKey),
+				KeyIndex:  0,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		signature := signResp.Signature
+
+		customRecords := map[uint64][]byte{
+			tlvMsgRecord:     []byte(newMsg),
+			tlvSenderRecord:  self[:],
+			tlvTimeRecord:    timeBuffer[:],
+			tlvSigRecord:     signature,
+			tlvKeySendRecord: preimage[:],
+		}
+
+		req := routerrpc.SendPaymentRequest{
+			PaymentHash:       hash[:],
+			AmtMsat:           payAmt,
+			FinalCltvDelta:    40,
+			Dest:              destination[:],
+			FeeLimitMsat:      chatMsgAmt * 10,
+			TimeoutSeconds:    30,
+			DestCustomRecords: customRecords,
+		}
+
+		go func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stream, err := client.SendPayment(ctx, &req)
+			if err != nil {
+				g.Update(func(g *gocui.Gui) error {
+					return err
+				})
+				return
+			}
+
+			for {
+				status, err := stream.Recv()
+				if err != nil {
+					break
+				}
+
+				switch status.State {
+				case routerrpc.PaymentState_SUCCEEDED:
+					msgLines[msgIdx].fee = uint64(status.Route.TotalFeesMsat)
+					runningBalance[*destination] -= payAmt
+					msgLines[msgIdx].state = stateDelivered
+					g.Update(updateView)
+					break
+
+				case routerrpc.PaymentState_IN_FLIGHT:
+
+				default:
+					msgLines[msgIdx].state = stateFailed
+					g.Update(updateView)
+					break
+				}
+			}
+		}()
+
+		return nil
+	}
+
 
 	addMsg := func(line chatLine) int {
+
+		var temp string ="temp"
+		if(line.Format()==temp){
+		sendreply_func()
+		}else{
+		}
 		msgLines = append(msgLines, line)
 		return len(msgLines) - 1
 	}
 
+	sendMessage := func(g *gocui.Gui, v *gocui.View) error {
+		if len(v.BufferLines()) == 0 {
+			return nil
+		}
+		newMsg := v.BufferLines()[0]
+
+		v.Clear()
+		if err := v.SetCursor(0, 0); err != nil {
+			return err
+		}
+		if err := v.SetOrigin(0, 0); err != nil {
+			return err
+		}
+
+		if newMsg[0] == '/' {
+			destHex := newMsg[1:]
+			setDest(destHex)
+
+			updateView(g)
+
+			return nil
+		}
+
+		if destination == nil {
+			return nil
+		}
+
+		d := *destination
+		msgIdx := addMsg(chatLine{
+			sender:    self,
+			text:      newMsg,
+			recipient: &d,
+		})
+
+		err := updateView(g)
+		if err != nil {
+			return err
+		}
+
+		payAmt := runningBalance[*destination]
+		if payAmt < chatMsgAmt {
+			payAmt = chatMsgAmt
+		}
+		if payAmt > 10*chatMsgAmt {
+			payAmt = 10 * chatMsgAmt
+		}
+
+		var preimage lntypes.Preimage
+		if _, err := rand.Read(preimage[:]); err != nil {
+			return err
+		}
+		hash := preimage.Hash()
+
+		// Message sending time stamp
+		timestamp := time.Now().UnixNano()
+		var timeBuffer [8]byte
+		byteOrder.PutUint64(timeBuffer[:], uint64(timestamp))
+
+		// Sign all data.
+		signData, err := getSignData(
+			self, *destination, timeBuffer[:], []byte(newMsg),
+		)
+		if err != nil {
+			return err
+		}
+
+		signResp, err := signClient.SignMessage(context.Background(), &signrpc.SignMessageReq{
+			Msg: signData,
+			KeyLoc: &signrpc.KeyLocator{
+				KeyFamily: int32(keychain.KeyFamilyNodeKey),
+				KeyIndex:  0,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		signature := signResp.Signature
+
+		customRecords := map[uint64][]byte{
+			tlvMsgRecord:     []byte(newMsg),
+			tlvSenderRecord:  self[:],
+			tlvTimeRecord:    timeBuffer[:],
+			tlvSigRecord:     signature,
+			tlvKeySendRecord: preimage[:],
+		}
+
+		req := routerrpc.SendPaymentRequest{
+			PaymentHash:       hash[:],
+			AmtMsat:           payAmt,
+			FinalCltvDelta:    40,
+			Dest:              destination[:],
+			FeeLimitMsat:      chatMsgAmt * 10,
+			TimeoutSeconds:    30,
+			DestCustomRecords: customRecords,
+		}
+
+		go func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stream, err := client.SendPayment(ctx, &req)
+			if err != nil {
+				g.Update(func(g *gocui.Gui) error {
+					return err
+				})
+				return
+			}
+
+			for {
+				status, err := stream.Recv()
+				if err != nil {
+					break
+				}
+
+				switch status.State {
+				case routerrpc.PaymentState_SUCCEEDED:
+					msgLines[msgIdx].fee = uint64(status.Route.TotalFeesMsat)
+					runningBalance[*destination] -= payAmt
+					msgLines[msgIdx].state = stateDelivered
+					g.Update(updateView)
+					break
+
+				case routerrpc.PaymentState_IN_FLIGHT:
+
+				default:
+					msgLines[msgIdx].state = stateFailed
+					g.Update(updateView)
+					break
+				}
+			}
+		}()
+
+		return nil
+	}
+
+	err = g.SetKeybinding("send", gocui.KeyEnter, gocui.ModNone, sendMessage)
+	if err != nil {
+		return err
+	}
+
 	go func() {
 		returnErr := func(err error) {
-		
+			g.Update(func(g *gocui.Gui) error {
+				return err
+			})
 		}
 
 		for {
@@ -271,142 +540,142 @@ func chat(ctx *cli.Context) error {
 				text:      string(msg),
 				timestamp: timestamp,
 			})
-			
+			g.Update(updateView)
 
 			amt := invoice.AmtPaid
 			runningBalance[*destination] += amt
 		}
 	}()
 
-	
-
-	sendMessage:= func() error {
-		
-		newMsg := Message
-
-		
-
-		if destination == nil {
-			return nil
-		}
-
-		d := *destination
-		msgIdx := addMsg(chatLine{
-			sender:    self,
-			text:      newMsg,
-			recipient: &d,
-		})
-
-		
-
-		payAmt := runningBalance[*destination]
-		if payAmt < chatMsgAmt {
-			payAmt = chatMsgAmt
-		}
-		if payAmt > 10*chatMsgAmt {
-			payAmt = 10 * chatMsgAmt
-		}
-
-		var preimage lntypes.Preimage
-		if _, err := rand.Read(preimage[:]); err != nil {
-			return err
-		}
-		hash := preimage.Hash()
-
-		// Message sending time stamp
-		timestamp := time.Now().UnixNano()
-		var timeBuffer [8]byte
-		byteOrder.PutUint64(timeBuffer[:], uint64(timestamp))
-
-		// Sign all data.
-		signData, err := getSignData(
-			self, *destination, timeBuffer[:], []byte(newMsg),
-		)
-		if err != nil {
-			return err
-		}
-
-		signResp, err := signClient.SignMessage(context.Background(), &signrpc.SignMessageReq{
-			Msg: signData,
-			KeyLoc: &signrpc.KeyLocator{
-				KeyFamily: int32(keychain.KeyFamilyNodeKey),
-				KeyIndex:  0,
-			},
-		})
-		if err != nil {
-			return err
-		}
-		signature := signResp.Signature
-
-		customRecords := map[uint64][]byte{
-			tlvMsgRecord:     []byte(newMsg),
-			tlvSenderRecord:  self[:],
-			tlvTimeRecord:    timeBuffer[:],
-			tlvSigRecord:     signature,
-			tlvKeySendRecord: preimage[:],
-		}
-
-		req := routerrpc.SendPaymentRequest{
-			PaymentHash:       hash[:],
-			AmtMsat:           payAmt,
-			FinalCltvDelta:    40,
-			Dest:              destination[:],
-			FeeLimitMsat:      chatMsgAmt * 10,
-			TimeoutSeconds:    30,
-			DestCustomRecords: customRecords,
-		}
-
-		
-			
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			stream, err := client.SendPayment(ctx, &req)
-			if err != nil {
-				
-				return nil
-			}
-
-			for {
-				status, err := stream.Recv()
-				if err != nil {
-					break
-				}
-
-				switch status.State {
-				case routerrpc.PaymentState_SUCCEEDED:
-					msgLines[msgIdx].fee = uint64(status.Route.TotalFeesMsat)
-					runningBalance[*destination] -= payAmt
-					msgLines[msgIdx].state = stateDelivered
-					
-					break
-
-				case routerrpc.PaymentState_IN_FLIGHT:
-
-				default:
-					msgLines[msgIdx].state = stateFailed
-					
-					break
-				}
-			}
-		
-
-		return nil 
+	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
+		return err
 	}
-	sendMessage()
-	
-
-
-	
-
-	
 
 	return nil
 }
 
+func layout(g *gocui.Gui) error {
+	g.Cursor = true
+
+	maxX, maxY := g.Size()
+	if v, err := g.SetView("messages", 0, 0, maxX-1, maxY-5); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		v.Title = " Messages "
+	}
+
+	if v, err := g.SetView("send", 0, maxY-4, maxX-1, maxY-1); err != nil {
+		if _, err := g.SetCurrentView("send"); err != nil {
+			return err
+		}
+
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+
+		v.Editable = true
+	}
+
+	updateView(g)
+
+	return nil
+}
+
+func quit(g *gocui.Gui, v *gocui.View) error {
+	return gocui.ErrQuit
+}
+
+func updateView(g *gocui.Gui) error {
+	const (
+		maxSenderLen = 16
+	)
+
+	sendView, _ := g.View("send")
+	if destination == nil {
+		sendView.Title = " Set a destination by typing /pubkey "
+	} else {
+		alias := keyToAlias[*destination]
+		sendView.Title = fmt.Sprintf(" Send to %v [balance: %v msat]",
+			alias, runningBalance[*destination])
+	}
+
+	messagesView, _ := g.View("messages")
+
+	messagesView.Clear()
+	cols, rows := messagesView.Size()
+
+	startLine := len(msgLines) - rows
+	if startLine < 0 {
+		startLine = 0
+	}
+
+	for _, line := range msgLines[startLine:] {
+		text := line.text
+		var r string
+		if line.recipient != nil {
+			r = keyToAlias[*line.recipient]
+		} else {
+			r = fmt.Sprintf("sent: %v",
+				line.timestamp.Format(time.ANSIC))
+		}
 
 
 
 
+		text += fmt.Sprintf(" \x1b[34m(%v)\x1b[0m", r)
+
+		var amtDisplay string
+		if line.state == stateDelivered {
+			amtDisplay = formatMsat(line.fee)
+		}
+
+		maxTextFieldLen := cols - len(amtDisplay) - maxSenderLen + 5
+		maxTextLen := maxTextFieldLen
+		if line.state != statePending {
+			maxTextLen -= 2
+		}
+		if len(text) > maxTextLen {
+			text = text[:maxTextLen-3] + "..."
+		}
+		paddingLen := maxTextFieldLen - len(text)
+		switch line.state {
+		case stateDelivered:
+			text += " \x1b[34m✔️\x1b[0m"
+			paddingLen -= 2
+		case stateFailed:
+			text += " \x1b[31m✘\x1b[0m"
+			paddingLen -= 2
+		}
+
+		text += strings.Repeat(" ", paddingLen)
+
+		senderAlias := keyToAlias[line.sender]
+		if len(senderAlias) > maxSenderLen {
+			senderAlias = senderAlias[:maxSenderLen]
+		}
+		fmt.Fprintf(messagesView, "%16v: %v \x1b[34m%v\x1b[0m",
+			senderAlias,
+			text, amtDisplay,
+		)
+
+		fmt.Fprintln(messagesView)
+	}
+	return nil
+}
+
+func formatMsat(msat uint64) string {
+	wholeSats := msat / 1000
+	msats := msat % 1000
+	var msatsStr string
+	if msats > 0 {
+		msatsStr = fmt.Sprintf(".%03d", msats)
+		msatsStr = strings.TrimRight(msatsStr, "0")
+	}
+	return fmt.Sprintf("[%d%-4s sat]",
+		wholeSats, msatsStr,
+	)
+}
 
 func getSignData(sender, recipient route.Vertex, timestamp []byte, msg []byte) ([]byte, error) {
 	var signData bytes.Buffer
