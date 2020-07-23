@@ -187,7 +187,7 @@ func chat(ctx *cli.Context) error {
 		msgLines = append(msgLines,line)
 		return len(msgLines)-1
 		}
-	sendreply_func :=func() error{				//받은 명령이 temp일 경우 파이썬을 실행해 온도를 측정하고 상대방에게 
+	sendreply_func :=func() error{				//받은 명령이 temp일 경우 파이썬을 실행해 온도를 측정하고 상대방에게 전송한다.
 		var g *gocui.Gui
 		var test string
 		cmd := exec.Command("python3","AdafruitDHT.py","11","4")
@@ -301,7 +301,7 @@ func chat(ctx *cli.Context) error {
 	}
 
 
-	addMsg := func(line chatLine) int {
+	addMsg := func(line chatLine) int {			//받은 메세지가 temp일 경우 위의 온도측정을 하는 함수로 이동해 메세지를 보내게 한다.
 
 		var temp string ="temp"
 		if(line.Format()==temp){
@@ -312,7 +312,7 @@ func chat(ctx *cli.Context) error {
 		return len(msgLines) - 1
 	}
 
-	sendMessage := func(g *gocui.Gui, v *gocui.View) error {
+	sendMessage := func(g *gocui.Gui, v *gocui.View) error {	//whatsat에 있는 채팅을 보내는 부분이다.
 		if len(v.BufferLines()) == 0 {
 			return nil
 		}
@@ -554,7 +554,7 @@ func chat(ctx *cli.Context) error {
 	return nil
 }
 
-func layout(g *gocui.Gui) error {
+func layout(g *gocui.Gui) error {				//채팅창의 ui에 관련된 부분이다. 
 	g.Cursor = true
 
 	maxX, maxY := g.Size()
@@ -586,7 +586,7 @@ func quit(g *gocui.Gui, v *gocui.View) error {
 	return gocui.ErrQuit
 }
 
-func updateView(g *gocui.Gui) error {
+func updateView(g *gocui.Gui) error {					
 	const (
 		maxSenderLen = 16
 	)
