@@ -14,6 +14,6 @@ Whatsat이란 라이트닝 네트워크를 활용한 채팅 프로그램 이다.
 -whatsat의 메세지를 수정하여 라즈베리파이에게 온도를 요청하고 받는 영상
 ![무제](https://user-images.githubusercontent.com/33947681/88308175-b027ec80-cd47-11ea-9246-a8e0bc7adc91.gif)
 
--노트북에서 온도를 요청하면 라즈베리파이에 부착된 센서가 온도를 측정하고 다시 노트북으로 전송하는 
+-노트북에서 온도를 요청하면 라즈베리파이에 부착된 센서가 온도를 측정하고 다시 노트북으로 전송하는 영상
 ![ezgif com-optimize](https://user-images.githubusercontent.com/33947681/88310412-9b992380-cd4a-11ea-87db-e5893dd31a24.gif)
 
