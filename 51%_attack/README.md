@@ -73,6 +73,7 @@
 여기서 ‘Transaction ID’는 해당 트랜잭션이 다른 트랜잭션과 구별될 수 있도록 부여된 아이디를 말한다.
 
  <img width="444" alt="스크린샷 2020-07-07 오후 8 46 23" src="https://user-images.githubusercontent.com/33947681/88273921-e0ef2e00-cd15-11ea-805b-b2b45a923e1c.png">
+ 
 (그림 3) 거래 트랜잭션
 
 
